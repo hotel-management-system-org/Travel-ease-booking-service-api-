@@ -26,7 +26,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -48,35 +47,24 @@ public class BookingServiceImpl implements BookingService {
 
 
     @Override
-    @Transactional
     public BookingResponseDto createBooking(CreateBookingRequestDto request, UUID userId, String idempotencyKey) {
-        Optional<Booking> exists = Optional.empty();
-
           if (idempotencyKey != null){
-             exists = idempotencyRepository.findByIdempotencyKey(idempotencyKey)
+              Optional<Booking> exists = idempotencyRepository.findByIdempotencyKey(idempotencyKey)
                       .map(IdempotencyRecord::getBooking);
 
 
               if (exists.isPresent()){
+                  log.info("Idempotency key {} matched. Returning existing booking.", idempotencyKey);
                   return getBookingById(exists.get().getId());
               }
           }
 
-          dateValidator.validateBookingDates(request.getCheckIn(), request.getCheckOut());
-
-       /* boolean overlapExists = bookingRepository
-                .existsOverlappingBooking(request.getCheckIn(), request.getCheckOut(), exists.get().getRoomId());
-
-        if (overlapExists) {
-            throw new RoomNotAvailableException("Room already booked for selected dates.");
-        }*/
+        dateValidator.validateBookingDates(request.getCheckIn(), request.getCheckOut());
 
         HotelBookingValidationResponse hotelValidate = hotelServiceClient.validateHotel(request.getHotelId());
 
-        if(!hotelValidate.isBookingAllowed()){
-            throw new BookingException(
-                    " Booking not allowed "
-            );
+        if (!hotelValidate.isBookingAllowed()) {
+            throw new BookingException("Booking not allowed for this hotel.");
         }
 
         RoomAvailabilityRequestDto availabilityRequest = RoomAvailabilityRequestDto.builder()
@@ -89,36 +77,26 @@ public class BookingServiceImpl implements BookingService {
         boolean available = hotelServiceClient.checkAndHold(availabilityRequest);
 
         if (!available){
-            throw new RoomNotAvailableException("Room not available");
+            throw new RoomNotAvailableException("Room not available or inventory hold failed.");
         }
 
-        int totalNights = (int)
-                ChronoUnit.DAYS.between(
-                        request.getCheckIn(),
-                        request.getCheckOut()
-                );
+        try {
+            int totalNights = (int) ChronoUnit.DAYS.between(request.getCheckIn(),request.getCheckOut());
+            return commonTransactionService.saveBookingAndIdempotency(request,userId,idempotencyKey,totalNights);
 
-        Booking booking = Booking.builder()
-                .id(UUID.randomUUID())
-                .roomId(request.getRoomId())
-                .userId(userId)
-                .address(request.getAddress())
-                .hotelId(request.getHotelId())
-                .checkIn(request.getCheckIn())
-                .checkOut(request.getCheckOut())
-                .totalNights(totalNights)
-                .totalPrice(request.getTotalPrice())
-                .status(BookingStatus.PENDING)
-                .firstName(request.getFirstName())
-                .lastName(request.getLastName())
-                .zipCode(request.getZipCode())
-                .city(request.getCity())
-                .guestEmail(request.getGuestEmail())
-                .guestPhone(request.getGuestPhone())
-                .createdBy(userId)
-                .build();
+        }catch (Exception ex){
+            log.error("Database save failed for booking. Rolling back hotel hold via compensating call.", ex);
 
-       return mapper.toBookingResponseDto(bookingRepository.save(booking));
+           HoldRoomRequestDto rollbackHold = HoldRoomRequestDto.builder()
+                    .roomId(request.getRoomId()).
+                    quantity(request.getQuantity()).
+                    checkIn(request.getCheckIn()).
+                    checkOut(request.getCheckOut()).
+                    build();
+           hotelServiceClient.releaseHold(rollbackHold);
+            throw new BookingException("Booking failed due to an internal system error. Your hold has been released.");
+
+        }
 
     }
 
@@ -225,25 +203,37 @@ public class BookingServiceImpl implements BookingService {
         Booking booking = bookingRepository.findById(id)
                 .orElseThrow(() -> new BookingNotFoundException("Booking not found with id: " + id));
 
-        HoldRoomRequestDto build = HoldRoomRequestDto.builder()
+        bookingValidator.validateBookingIsCancellable(booking);
+        UpdateBookingStatusRequestDto updateRequest = UpdateBookingStatusRequestDto.builder()
+                .status(BookingStatus.CANCELLED)
+                .remarks("Booking cancelled")
+                .build();
+        BookingResponseDto response = commonTransactionService.updateBookingStatus(id, updateRequest, userId);
+
+
+        HoldRoomRequestDto releaseHoldRequest = HoldRoomRequestDto.builder()
                 .roomId(booking.getRoomId())
                 .checkIn(booking.getCheckIn())
                 .checkOut(booking.getCheckOut())
                 .build();
 
-        boolean isReleasedHold = hotelServiceClient.releaseHold(build);
+        try {
+            boolean isReleasedHold = hotelServiceClient.releaseHold(releaseHoldRequest);
 
-        if (isReleasedHold) {
-            bookingValidator.validateBookingIsCancellable(booking);
-
-            UpdateBookingStatusRequestDto request = UpdateBookingStatusRequestDto.builder()
-                    .status(BookingStatus.CANCELLED)
-                    .remarks("Booking cancelled")
+            if (!isReleasedHold) {
+                throw new BookingException("Hotel service failed to release the room hold.");
+            }
+        }catch (Exception ex){
+            log.error("Failed to release room hold in Hotel Service for booking: {}. Rolling back DB state.", id, ex);
+            UpdateBookingStatusRequestDto rollbackRequest = UpdateBookingStatusRequestDto.builder()
+                    .status(BookingStatus.CONFIRMED)
+                    .remarks("Rollback: Failed to release hotel hold -> " + ex.getMessage())
                     .build();
-
-            return commonTransactionService.updateBookingStatus(id, request, userId);
+            commonTransactionService.updateBookingStatus(id, rollbackRequest, userId);
+            throw new BookingException("Cancellation failed because hotel inventory could not be updated. Please try again.");
         }
-      return null;
+
+      return response;
 
     }
 
