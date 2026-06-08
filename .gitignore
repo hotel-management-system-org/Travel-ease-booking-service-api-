@@ -31,3 +31,8 @@ build/
 
 ### VS Code ###
 .vscode/
+.gitattributes
+BookingServiceApiApplicationTests.java
+maven-wrapper.properties
+mvnw
+mvnw.cmd
