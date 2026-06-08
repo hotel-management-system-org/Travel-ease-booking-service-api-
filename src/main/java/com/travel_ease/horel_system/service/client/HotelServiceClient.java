@@ -67,10 +67,7 @@ public class HotelServiceClient {
     }
 
     public HotelBookingValidationResponse validateHotel(UUID hotelId) {
-        System.out.println("Hotel Id: " + hotelId);
-
         String url = hotelServiceUrl + "/api/v1/rooms/internal/" + hotelId + "/validate-booking";
-
         try {
             log.info("Calling Hotel Service | hotelId={}",
                     hotelId);
