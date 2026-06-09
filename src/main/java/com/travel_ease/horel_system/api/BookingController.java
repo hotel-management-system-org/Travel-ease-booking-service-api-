@@ -1,5 +1,6 @@
 package com.travel_ease.horel_system.api;
 
+import com.travel_ease.horel_system.dto.request.ConfirmBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.CreateBookingRequestDto;
 import com.travel_ease.horel_system.dto.response.BookingResponseDto;
 import com.travel_ease.horel_system.enums.BookingStatus;
@@ -135,14 +136,14 @@ public class BookingController {
     @PostMapping("/user/{id}/confirm")
     @PreAuthorize("hasAnyAuthority('SUPER_ADMIN','CUSTOMER')")
     public ResponseEntity<StandardResponseDto> confirmBooking(
-        @PathVariable UUID id,
+        @Valid @RequestBody ConfirmBookingRequestDto dto,
         Authentication authentication
     ) {
         String userId = jwtUtil.extractUserId(authentication);
 
         return new ResponseEntity<>(
                 new StandardResponseDto(
-                        200, "Booking status updated!", bookingService.confirmBooking(id,UUID.fromString(userId))
+                        200, "Booking status updated!", bookingService.confirmBooking(dto,UUID.fromString(userId))
                 ),
                 HttpStatus.OK
         );
