@@ -1,5 +1,6 @@
 package com.travel_ease.horel_system.service;
 
+import com.travel_ease.horel_system.dto.request.ConfirmBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.CreateBookingRequestDto;
 import com.travel_ease.horel_system.dto.response.BookingResponseDto;
 import com.travel_ease.horel_system.dto.response.paginate.BookingPaginateResponseDto;
@@ -15,7 +16,7 @@ public interface BookingService {
     public BookingPaginateResponseDto getBookingsByUser(UUID userId,int page, int size);
     public BookingPaginateResponseDto getBookingsByStatus(int page, int size,BookingStatus status);
     public BookingPaginateResponseDto getBookingsByDateRange(int page, int size,LocalDate startDate, LocalDate endDate);
-    public BookingResponseDto confirmBooking(UUID id,UUID userId);
+    public BookingResponseDto confirmBooking(ConfirmBookingRequestDto dto, UUID userId);
     public BookingResponseDto cancelBooking(UUID id, UUID userId, String reason);
     public void deleteBooking(UUID id);
 
