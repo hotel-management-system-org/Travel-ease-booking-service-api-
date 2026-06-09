@@ -86,12 +86,10 @@ public class Booking {
     @Column(name = "address", length = 100)
     private String address;
 
-    // Optimistic Locking
     @Version
     @Column(name = "version")
     private Long version;
 
-    // Audit Fields
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -120,7 +118,5 @@ public class Booking {
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
-
-
 
 }
