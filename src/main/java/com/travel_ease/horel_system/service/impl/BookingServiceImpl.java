@@ -1,5 +1,6 @@
 package com.travel_ease.horel_system.service.impl;
 
+import com.travel_ease.horel_system.dto.request.ConfirmBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.CreateBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.UpdateBookingStatusRequestDto;
 import com.travel_ease.horel_system.dto.request.client.HoldRoomRequestDto;
@@ -188,13 +189,23 @@ public class BookingServiceImpl implements BookingService {
 
 
     @Override
-    public BookingResponseDto confirmBooking(UUID id, UUID userId) {
+    public BookingResponseDto confirmBooking(ConfirmBookingRequestDto dto, UUID userId) {
+        log.info("Processing booking confirmation in Booking Service for user: {}", userId);
         UpdateBookingStatusRequestDto request = UpdateBookingStatusRequestDto.builder()
                 .status(BookingStatus.CONFIRMED)
                 .remarks("Booking confirmed")
                 .build();
 
-        return commonTransactionService.updateBookingStatus(id, request, userId);
+        BookingResponseDto response = commonTransactionService.updateBookingStatus(UUID.fromString(dto.roomId()), request, userId);
+        ConfirmBookingRequestDto confirmBookingRequestDto = ConfirmBookingRequestDto.builder()
+                .roomId(dto.roomId())
+                .checkIn(dto.checkIn())
+                .checkOut(dto.checkOut())
+                .quantity(dto.quantity())
+                .build();
+
+        hotelServiceClient.updateInventory(confirmBookingRequestDto);
+        return response;
     }
 
     @Override
