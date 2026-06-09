@@ -1,5 +1,6 @@
 package com.travel_ease.horel_system.service.client;
 
+import com.travel_ease.horel_system.dto.request.ConfirmBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.client.HoldRoomRequestDto;
 import com.travel_ease.horel_system.dto.request.client.RoomAvailabilityRequestDto;
 import com.travel_ease.horel_system.dto.response.client.HotelBookingValidationResponse;
@@ -117,4 +118,50 @@ public class HotelServiceClient {
             );
         }
     }
+
+    public boolean updateInventory(ConfirmBookingRequestDto dto){
+        String url = hotelServiceUrl + "/api/v1/rooms/internal/update-inventory";
+
+        try {
+            log.info("Calling Hotel Service | roomId={}",
+                    dto.roomId());
+
+            HttpEntity<ConfirmBookingRequestDto> entity = new HttpEntity<>(dto);
+
+            ResponseEntity<Boolean> response =
+                    restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
+                            entity,
+                            Boolean.class
+                    );
+
+            return Boolean.TRUE.equals(response.getBody());
+
+        } catch (Exception ex) {
+            log.error("Hotel validation failed | hotelId={}", dto.roomId(), ex);
+            throw new HotelServiceException(
+                    "Unable to validate hotel for booking"
+            );
+        }
+
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
