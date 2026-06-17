@@ -4,14 +4,12 @@ import com.travel_ease.horel_system.dto.request.ConfirmBookingRequestDto;
 import com.travel_ease.horel_system.dto.request.client.HoldRoomRequestDto;
 import com.travel_ease.horel_system.dto.request.client.RoomAvailabilityRequestDto;
 import com.travel_ease.horel_system.dto.response.client.HotelBookingValidationResponse;
-import com.travel_ease.horel_system.exception.HotelServiceException;
-import com.travel_ease.horel_system.exception.RoomNotAvailableException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import java.util.UUID;
 
@@ -23,145 +21,71 @@ public class HotelServiceClient {
     @Value("${booking.hotel-service.url}")
     private String hotelServiceUrl;
     private final RestTemplate restTemplate;
+    private static final String HOTEL_SERVICE = "hotelService";
 
-    public boolean checkAndHold(RoomAvailabilityRequestDto request){
+    @CircuitBreaker(name = HOTEL_SERVICE , fallbackMethod = "checkAndHoldFallback")
+    public boolean checkAndHold(RoomAvailabilityRequestDto request) {
         log.info("Attempting to hold rooms - id: {}, qty: {}",
                 request.roomId(), request.quantity());
 
-        HoldRoomRequestDto holdRequest = HoldRoomRequestDto.builder()
+        String url = hotelServiceUrl + "/api/v1/rooms/internal/hold";
+
+        HttpEntity<HoldRoomRequestDto> entity = new HttpEntity<>(HoldRoomRequestDto.builder()
                 .roomId(request.roomId())
                 .quantity(request.quantity())
                 .checkIn(request.checkIn())
                 .checkOut(request.checkOut())
-                .build();
+                .build()
+        );
 
-        HttpEntity<HoldRoomRequestDto> entity = new HttpEntity<>(holdRequest);
-
-        String url = hotelServiceUrl + "/api/v1/rooms/internal/hold";
-
-        try {
-            ResponseEntity<Void> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    entity,
-                    Void.class
-
-            );
-
-            boolean success = response.getStatusCode().is2xxSuccessful();
-
-            log.info("Room hold result: {}", success ? "SUCCESS" : "FAILED");
-
-            return success;
-        }catch (HttpClientErrorException.NotFound ex){
-            log.warn("Room hold failed - not available: {}", ex.getResponseBodyAsString());
-            return false;
-        }catch (HttpClientErrorException e) {
-            log.error("Room hold failed with status {}: {}",
-                    e.getStatusCode(),
-                    e.getResponseBodyAsString());
-            return false;
-        } catch (Exception ex) {
-            log.error("Room hold failed unexpectedly", ex);
-            throw new RoomNotAvailableException("Room service unavailable: " + ex.getMessage());
-        }
+        ResponseEntity<Void> response = restTemplate.postForEntity(url, entity, Void.class);
+        return response.getStatusCode().is2xxSuccessful();
     }
 
+    @CircuitBreaker(name = HOTEL_SERVICE , fallbackMethod = "validateHotelFallback")
     public HotelBookingValidationResponse validateHotel(UUID hotelId) {
         String url = hotelServiceUrl + "/api/v1/rooms/internal/" + hotelId + "/validate-booking";
-        try {
-            log.info("Calling Hotel Service | hotelId={}",
-                    hotelId);
-
-            ResponseEntity<HotelBookingValidationResponse> response =
-                    restTemplate.exchange(
-                            url,
-                            HttpMethod.GET,
-                            null,
-                            HotelBookingValidationResponse.class
-                    );
-
-            return response.getBody();
-
-        } catch (Exception ex) {
-            log.error("Hotel validation failed | hotelId={}", hotelId, ex);
-            throw new HotelServiceException(
-                    "Unable to validate hotel for booking"
-            );
-        }
+        log.info("Calling Hotel Service | hotelId={}", hotelId);
+        return restTemplate.getForObject(url, HotelBookingValidationResponse.class);
     }
 
+    @CircuitBreaker(name = HOTEL_SERVICE, fallbackMethod = "releaseHoldFallback")
     public boolean releaseHold(HoldRoomRequestDto dto) {
         String url = hotelServiceUrl + "/api/v1/rooms/internal/hold-release";
-
-
-        try {
-            log.info("Calling Hotel Service | roomId={}",
-                    dto.roomId());
-
-            HttpEntity<HoldRoomRequestDto> entity = new HttpEntity<>(dto);
-
-            ResponseEntity<Boolean> response =
-                    restTemplate.exchange(
-                            url,
-                            HttpMethod.POST,
-                            entity,
-                            Boolean.class
-                    );
-
-            return Boolean.TRUE.equals(response.getBody());
-
-        } catch (Exception ex) {
-            log.error("Hotel validation failed | hotelId={}", dto.roomId(), ex);
-            throw new HotelServiceException(
-                    "Unable to validate hotel for booking"
-            );
-        }
+        log.info("Calling Hotel Service to release hold | roomId={}", dto.roomId());
+        ResponseEntity<Boolean> response = restTemplate.postForEntity(url, dto, Boolean.class);
+        return Boolean.TRUE.equals(response.getBody());
     }
 
-    public boolean updateInventory(ConfirmBookingRequestDto dto){
+    @CircuitBreaker(name = HOTEL_SERVICE, fallbackMethod = "updateInventoryFallback")
+    public void updateInventory(ConfirmBookingRequestDto dto) {
         String url = hotelServiceUrl + "/api/v1/rooms/internal/update-inventory";
+        log.info("Updating inventory | roomId={}", dto.roomId());
+        restTemplate.postForEntity(url, dto, Boolean.class);
 
-        try {
-            log.info("Calling Hotel Service | roomId={}",
-                    dto.roomId());
+    }
 
-            HttpEntity<ConfirmBookingRequestDto> entity = new HttpEntity<>(dto);
 
-            ResponseEntity<Boolean> response =
-                    restTemplate.exchange(
-                            url,
-                            HttpMethod.POST,
-                            entity,
-                            Boolean.class
-                    );
+    public boolean checkAndHoldFallback(RoomAvailabilityRequestDto request, Throwable t) {
+        log.error("Circuit Breaker [HOTEL_SERVICE] triggered! checkAndHold failed for RoomId: {}. Reason: {}. ErrorType: {}",
+                request.roomId(), t.getMessage(), t.getClass().getSimpleName());
+        return false;
+    }
 
-            return Boolean.TRUE.equals(response.getBody());
+    public HotelBookingValidationResponse validateHotelFallback(UUID hotelId, Throwable t) {
+        log.error("Circuit Breaker [HOTE_SERVICE] triggered! validateHotel failed for hotelId: {}. Reason: {} ErrorType: {}",
+                hotelId, t.getMessage(), t.getClass().getSimpleName());
+        return null;
+    }
 
-        } catch (Exception ex) {
-            log.error("Hotel validation failed | hotelId={}", dto.roomId(), ex);
-            throw new HotelServiceException(
-                    "Unable to validate hotel for booking"
-            );
-        }
+    public boolean releaseHoldFallback(HoldRoomRequestDto dto, Throwable t) {
+        log.error("Circuit Breaker [HOTEL_SERVICE] triggered! ReleaseHold failed for RoomId: {}. Reason: {}. ErrorType: {}.",
+                dto.roomId(), t.getMessage(), t.getClass().getSimpleName());
+        return false;
+    }
 
+    public void updateInventoryFallback(ConfirmBookingRequestDto dto, Throwable t) {
+        log.error("Circuit Breaker [HOTEL_SERVICE] triggered! UpdateInventory failed for RoomId: {}. Reason: {}. ErrorType: {}.",
+                dto.roomId(), t.getMessage(), t.getClass().getSimpleName());
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
